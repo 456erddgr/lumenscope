@@ -1,0 +1,39 @@
+{
+  "name": "lumenscope",
+  "version": "1.1.0",
+  "description": "显微镜 / USB 摄像头的实时查看器：超分辨率、防抖、防果冻、降噪、数字变焦，可输出虚拟摄像头",
+  "main": "electron/main.js",
+  "keywords": [
+    "microscope",
+    "usb-camera",
+    "webcam",
+    "video-stabilization",
+    "rolling-shutter",
+    "super-resolution",
+    "denoise",
+    "virtual-camera",
+    "webgl2",
+    "phone-repair",
+    "pcb-inspection",
+    "soldering",
+    "digital-magnifier",
+    "uvc"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "serve": "node server.js",
+    "launch": "node launch.js",
+    "test:live": "node scripts/check-live.js",
+    "test:zoom": "node scripts/test-zoom.js",
+    "bench:quality": "node scripts/bench-quality.js",
+    "bench:upscale": "node scripts/bench-upscale.js",
+    "make:source": "node scripts/make-y4m.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3"
+  }
+}

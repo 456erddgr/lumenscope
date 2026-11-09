@@ -1,0 +1,26 @@
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+*.log
+
+# 测试片源（体积巨大，用 scripts/make-y4m.js 现场生成）
+*.y4m
+*.mp4
+*.webm
+
+# 验证脚本产生的临时截图（提交进仓库的是 docs/shots/ 下那几张手工挑过的）
+docs/shots/bench-dn-*.png
+docs/shots/check-*.png
+docs/shots/live-*.png
+docs/shots/frame-*.png
+
+# 调研用的临时抓取，不随仓库分发
+research/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

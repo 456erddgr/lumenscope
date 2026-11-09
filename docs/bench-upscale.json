@@ -1,0 +1,18 @@
+{
+  "lanczos": {
+    "dx": 1,
+    "dy": -1,
+    "flip": true,
+    "psnr": 34.372,
+    "ssim": 0.9057,
+    "sharpness": 173.5
+  },
+  "easu": {
+    "dx": 1,
+    "dy": 0,
+    "flip": true,
+    "psnr": 31.382,
+    "ssim": 0.8559,
+    "sharpness": 138.3
+  }
+}

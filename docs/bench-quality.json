@@ -1,0 +1,52 @@
+{
+  "sigma": 9,
+  "cleanLap": 1825,
+  "rolling": [
+    {
+      "rolling": false,
+      "slope": 5.98,
+      "rms": 0.066,
+      "appliedSpanPx": 0,
+      "lastSkewPx": 6.03,
+      "rsOn": false,
+      "histN": 0,
+      "mvTx": 0
+    },
+    {
+      "rolling": true,
+      "slope": 1.697,
+      "rms": 0.066,
+      "appliedSpanPx": 4.91,
+      "lastSkewPx": 6.59,
+      "rsOn": true,
+      "histN": 22,
+      "mvTx": 5.658
+    }
+  ],
+  "denoise": [
+    {
+      "denoise": 0,
+      "tnoise": 7.721,
+      "lap": 3194,
+      "psnr": 29.12
+    },
+    {
+      "denoise": 0.35,
+      "tnoise": 2.593,
+      "lap": 2100,
+      "psnr": 37.36
+    },
+    {
+      "denoise": 0.55,
+      "tnoise": 1.764,
+      "lap": 2002,
+      "psnr": 39.93
+    },
+    {
+      "denoise": 0.9,
+      "tnoise": 0.97,
+      "lap": 1675,
+      "psnr": 34.56
+    }
+  ]
+}
