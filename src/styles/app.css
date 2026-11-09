@@ -456,7 +456,10 @@ body:not(.is-electron) .topbar { padding-left: 18px; }
 
 /* ---------------- 侧面板 ---------------- */
 .panel {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: var(--surface-1);
   border-left: 1px solid var(--hairline);
   overflow: hidden;
@@ -465,10 +468,11 @@ body:not(.is-electron) .topbar { padding-left: 18px; }
 .stage.panel-closed .panel { opacity: 0; pointer-events: none; }
 
 .panel-inner {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 18px 16px 28px;
+  padding: 18px 16px 20px;
   display: flex; flex-direction: column; gap: 22px;
   width: var(--panel-w);
 }
@@ -842,18 +846,14 @@ body.is-electron .topbar { padding-left: 88px; }
   .zoom-ctl { right: 10px; bottom: 62px; }
 }
 
-/* —— 作者署名 —— */
-.brand-by {
-  font-size: 11px;
-  letter-spacing: .01em;
-  color: var(--ink-3);
-  white-space: nowrap;
-}
+/* —— 作者署名：固定在面板底部，不随内容滚走 —— */
 .panel-foot {
-  margin-top: auto;
-  padding-top: 18px;
+  flex: 0 0 auto;
+  padding: 10px 16px 12px;
   border-top: 1px solid var(--hairline);
-  display: flex; flex-direction: column; gap: 3px;
+  background: var(--surface-1);
+  display: flex; flex-direction: column; gap: 2px;
+  width: var(--panel-w);
 }
 .author-line {
   margin: 0;
@@ -876,3 +876,10 @@ body.is-electron .topbar { padding-left: 88px; }
   opacity: .8;
 }
 body.is-electron .topbar { padding-left: 88px; }
+
+.brand-by {
+  font-size: 11px;
+  letter-spacing: .01em;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
