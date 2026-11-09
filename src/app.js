@@ -17,6 +17,8 @@
     resCards: $('resCards'), resMeta: $('resMeta'), motionMeta: $('motionMeta'),
     cameraSelect: $('cameraSelect'), ckAwb: $('ckAwb'), btnReveal: $('btnReveal'), saveLabel: $('saveLabel'),
     ckAutoExposure: $('ckAutoExposure'), fpsGroup: $('fpsGroup'), engineGroup: $('engineGroup'),
+    captureResGroup: $('captureResGroup'), captureFpsGroup: $('captureFpsGroup'),
+    captureHint: $('captureHint'), camStatus: $('camStatus'),
     btnVcam: $('btnVcam'), vcamLabel: $('vcamLabel'), vcamHint: $('vcamHint'), vcamMeta: $('vcamMeta'),
     zoomCtl: $('zoomCtl'), zoomIn: $('zoomIn'), zoomOut: $('zoomOut'), zoomVal: $('zoomVal'), zoomPct: $('zoomPct'),
   };
@@ -34,6 +36,8 @@
     available: [],
     streamer: null,
     vcamOn: false,
+    srcFps: null,      // 摄像头真实帧率探针
+    srcRaf: 0,
   };
 
   // ---------- 宿主适配层 ----------
@@ -227,31 +231,78 @@
   }
 
   // ---------- 摄像头 ----------
+  // 采集设置：分辨率 / 帧率，用户可在面板里选，也会被记住
+  const capture = {
+    height: 'auto',    // 'auto' | 540 | 720 | 1080
+    fps: 'auto',       // 'auto' | 30 | 60
+  };
+
+  function captureConstraints(deviceId) {
+    const c = { audio: false, video: {} };
+    if (deviceId) c.video.deviceId = { exact: deviceId };
+    if (capture.height !== 'auto') {
+      // 只给 ideal：用 exact 的话，摄像头不支持这个尺寸会直接 OverconstrainedError，
+      // ideal 会让浏览器挑最接近的，更稳。
+      c.video.height = { ideal: Number(capture.height) };
+      c.video.width = { ideal: Math.round(Number(capture.height) * 16 / 9) };
+    }
+    if (capture.fps !== 'auto') c.video.frameRate = { ideal: Number(capture.fps) };
+    return c;
+  }
+
   async function openCamera(cam) {
     closeStream();
     setOverlay('busy', { name: prettify(cam?.label, 0) });
     el.deviceTitle.textContent = prettify(cam?.label, 0);
 
-    const wantRes = state.pipeline?.settings.outputHeight || 1080;
-    const ideal = wantRes >= 1440 ? [2560, 1440] : (wantRes >= 1080 ? [1920, 1080] : [1280, 720]);
+    // 采集约束策略（实测见 scripts/exp-constraints.js / exp-best-format.js）：
+    // 有些杂牌 UVC（比如这台 VID_1224）对 width/height/frameRate 很挑，
+    // 带错约束会让真实帧率从 30 掉到个位数，而 track.getSettings() 仍然谎报 30。
+    // 所以策略是：
+    //   1) 用户在面板里选的格式 → 先按它试
+    //   2) 试完立刻实测 1.2 秒真实帧率，低于 20fps 就自动降级到"只给 deviceId"
+    //   3) 面板上如实显示实际拿到的分辨率和帧率，不对就提示
+    const devId = cam?.deviceId || null;
 
-    const attempts = [
-      { video: { deviceId: cam?.deviceId ? { exact: cam.deviceId } : undefined, width: { ideal: ideal[0] }, height: { ideal: ideal[1] }, frameRate: { ideal: 30, max: 60 } }, audio: false },
-      { video: { deviceId: cam?.deviceId ? { exact: cam.deviceId } : undefined, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }, audio: false },
-      { video: cam?.deviceId ? { deviceId: { exact: cam.deviceId } } : true, audio: false },
-    ];
-
-    let stream = null, lastErr = null;
-    for (const constraints of attempts) {
+    async function tryGet(constraints) {
       try {
-        // 有些 USB 摄像头在"设备被占用"时 getUserMedia 永不 resolve，加超时兜底，
-        // 否则界面会一直停在"正在唤醒…"，用户以为软件坏了。
-        stream = await Promise.race([
+        return await Promise.race([
           navigator.mediaDevices.getUserMedia(constraints),
           new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('打开摄像头超时'), { name: 'TimeoutError' })), 8000)),
         ]);
-        break;
-      } catch (e) { lastErr = e; }
+      } catch (e) { return { __err: e }; }
+    }
+
+    let stream = null, lastErr = null;
+    let usedFallback = false;
+
+    const wanted = captureConstraints(devId);
+    if (capture.height !== 'auto' || capture.fps !== 'auto') {
+      const r = await tryGet(wanted);
+      if (r && !r.__err) {
+        // 实测这个格式的真实帧率，不行就换
+        const fps = await measureStreamFps(r, 1200);
+        if (fps >= 20) {
+          stream = r;
+        } else {
+          r.getTracks().forEach(t => t.stop());
+          usedFallback = true;
+        }
+      } else {
+        lastErr = r && r.__err;
+        usedFallback = true;
+      }
+    }
+
+    if (!stream) {
+      const plain = { audio: false, video: devId ? { deviceId: { exact: devId } } : true };
+      const r = await tryGet(plain);
+      if (r && !r.__err) {
+        stream = r;
+        if (capture.height !== 'auto' || capture.fps !== 'auto') usedFallback = true;
+      } else {
+        lastErr = r && r.__err;
+      }
     }
 
     if (!stream) {
@@ -267,6 +318,12 @@
               : (lastErr?.message || '未知错误。');
       setOverlay('error', { title: '无法打开摄像头', body: msg });
       return;
+    }
+    if (usedFallback) {
+      state.captureFallback = true;
+      toast('这个分辨率摄像头跑不动，已自动换成它最稳的格式', 'info', 4000);
+    } else {
+      state.captureFallback = false;
     }
 
     state.stream = stream;
@@ -288,6 +345,12 @@
     });
 
     state.video = video;
+    // 诊断用：把 video 和当前流挂到调试对象上，
+    // 方便用 requestVideoFrameCallback 测"源帧率 vs 渲染帧率"。
+    if (window.__lumenDebug) {
+      window.__lumenDebug.video = video;
+      window.__lumenDebug.stream = stream;
+    }
     resizePipelineForNative();
     startLoop();
     setOverlay('live');
@@ -298,7 +361,12 @@
     el.statNative.textContent = native;
     if (/Microscope|Boshida|UVC|USB/i.test(track.label || '')) { /* label 可能被浏览器简化 */ }
     updateResMeta();
+    updateCaptureInfo(track);
     toast(`已连接 ${prettify(track.label || cam?.label, 0)} · ${native}`, 'ok');
+
+    // 挂上真实帧率探针：track.getSettings().frameRate 是不可信的（驱动会谎报 30），
+    // 只有 requestVideoFrameCallback 数出来的才是"摄像头真的送来几帧"。
+    startSourceFpsMeter(video);
 
     track.addEventListener('ended', () => {
       toast('设备已断开', 'error');
@@ -307,7 +375,142 @@
     });
   }
 
+  // 用 requestVideoFrameCallback 实测一段时间内"摄像头真的送来几帧"
+  function measureStreamFps(stream, ms) {
+    return new Promise((resolve) => {
+      const v = document.createElement('video');
+      v.srcObject = stream;
+      v.muted = true;
+      v.playsInline = true;
+      let n = 0, cb = 0, done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try { if (cb) v.cancelVideoFrameCallback(cb); } catch (_) {}
+        try { v.pause(); } catch (_) {}
+        // 只停 video 元素，不 stop track（调用方可能还要用这个 stream）
+        resolve(n);
+      };
+      const start = () => {
+        if (typeof v.requestVideoFrameCallback === 'function') {
+          const onF = () => { n++; cb = v.requestVideoFrameCallback(onF); };
+          cb = v.requestVideoFrameCallback(onF);
+        } else {
+          // 退路：按 currentTime 变化粗算
+          let lastT = v.currentTime;
+          const t = setInterval(() => {
+            if (v.currentTime !== lastT) { n++; lastT = v.currentTime; }
+          }, 4);
+          setTimeout(() => clearInterval(t), ms);
+        }
+        setTimeout(finish, ms);
+      };
+      v.play().then(start).catch(() => { setTimeout(finish, ms); });
+    }).then((frames) => frames / (ms / 1000));
+  }
+
+  // 把实际拿到的采集格式如实写到面板上（不采信 track.getSettings 的帧率）
+  function updateCaptureInfo(track) {
+    const s = track && track.getSettings ? track.getSettings() : {};
+    const v = state.video;
+    const w = v ? v.videoWidth : (s.width || 0);
+    const h = v ? v.videoHeight : (s.height || 0);
+    const declared = s.frameRate ? Math.round(s.frameRate) : 0;
+    const wantRes = capture.height === 'auto' ? null : Number(capture.height);
+    const wantFps = capture.fps === 'auto' ? null : Number(capture.fps);
+    if (el.camStatus) {
+      el.camStatus.textContent = w ? `${w}×${h}` : '未连接';
+    }
+    if (!el.captureHint) return;
+    if (!w) {
+      el.captureHint.textContent = '切到「自动」由摄像头自己协商最稳的格式';
+      el.captureHint.dataset.tone = 'ok';
+      return;
+    }
+    // 你选的 vs 实际拿到的，不一致就说清楚
+    const gotLower = wantRes && h < wantRes * 0.9;
+    const fpsLower = wantFps && declared && declared < wantFps * 0.9;
+    if (state.captureFallback || gotLower) {
+      el.captureHint.textContent = `这台摄像头给不了 ${wantRes}p，实际是 ${w}×${h}。换其它档位会自动回退，不会卡死。`;
+      el.captureHint.dataset.tone = 'warn';
+    } else if (fpsLower) {
+      el.captureHint.textContent = `当前采集 ${w}×${h} · 实际 ${declared}fps（你要的是 ${wantFps}fps，这台给不到）`;
+      el.captureHint.dataset.tone = 'warn';
+    } else {
+      el.captureHint.textContent = `当前采集 ${w}×${h}${declared ? ' · ' + declared + 'fps' : ''}`;
+      el.captureHint.dataset.tone = 'ok';
+    }
+  }
+
+  // 切换采集分辨率/帧率 → 用原设备重开一次
+  async function applyCaptureSetting() {
+    if (!state.available.length) {
+      toast('还没有连接摄像头', 'info');
+      return;
+    }
+    const cam = state.available.find((c) => c.deviceId === state.deviceId) || pickPreferred(state.available);
+    if (!cam) return;
+    await openCamera(cam);
+  }
+
+  // 记住用户的采集设置
+  function saveCapturePrefs() {
+    try {
+      localStorage.setItem('lumen.capture', JSON.stringify(capture));
+    } catch (_) {}
+  }
+
+  function restoreCapturePrefs() {
+    try {
+      const raw = localStorage.getItem('lumen.capture');
+      if (!raw) return;
+      const o = JSON.parse(raw);
+      if (o && (o.height === 'auto' || [540, 720, 1080].includes(Number(o.height)))) capture.height = o.height === 'auto' ? 'auto' : Number(o.height);
+      if (o && (o.fps === 'auto' || [30, 60].includes(Number(o.fps)))) capture.fps = o.fps === 'auto' ? 'auto' : Number(o.fps);
+    } catch (_) {}
+    const mark = (group, attr, val) => {
+      if (!group) return;
+      [...group.children].forEach((n) => {
+        n.classList.toggle('is-active', String(n.dataset[attr]) === String(val));
+      });
+    };
+    mark(el.captureResGroup, 'cap', capture.height);
+    mark(el.captureFpsGroup, 'capfps', capture.fps);
+  }
+
+  // 统计摄像头每秒真的送来几帧，并和"我们渲染了几帧"对比
+  function startSourceFpsMeter(video) {
+    stopSourceFpsMeter();
+    if (typeof video.requestVideoFrameCallback !== 'function') return;
+
+    state.srcFps = { frames: 0, since: performance.now(), value: 0, reported: 0 };
+    const onFrame = () => {
+      if (state.video !== video) return;
+      const m = state.srcFps;
+      m.frames++;
+      const now = performance.now();
+      if (now - m.since >= 1000) {
+        m.reported = m.frames * 1000 / (now - m.since);   // 摄像头真实帧率
+        m.value = Math.round(m.reported * 10) / 10;
+        m.frames = 0;
+        m.since = now;
+      }
+      state.srcRaf = video.requestVideoFrameCallback(onFrame);
+    };
+    state.srcRaf = video.requestVideoFrameCallback(onFrame);
+  }
+
+  function stopSourceFpsMeter() {
+    const v = state.video;
+    if (v && state.srcRaf && typeof v.cancelVideoFrameCallback === 'function') {
+      try { v.cancelVideoFrameCallback(state.srcRaf); } catch (_) {}
+    }
+    state.srcRaf = 0;
+    state.srcFps = null;
+  }
+
   function closeStream() {
+    stopSourceFpsMeter();
     if (state.stream) {
       state.stream.getTracks().forEach(t => t.stop());
       state.stream = null;
@@ -380,10 +583,19 @@
       frames++;
       const now = performance.now();
       if (now - lastFpsT > 480) {
-        const fps = frames * 1000 / (now - lastFpsT);
-        el.statFps.textContent = fps.toFixed(0);
+        const renderFps = frames * 1000 / (now - lastFpsT);
+        const srcFps = state.srcFps ? state.srcFps.reported : 0;
+        // 显示"真实喂进来的帧率"，不是我们循环了多少次。
+        // 只有源帧率正常时才显示渲染帧率（此时两者一致）；
+        // 源跟不上就如实显示源的真实值，并用强调色标出来 —— 不再谎报 30。
+        const shown = srcFps > 0 ? Math.min(srcFps, renderFps) : renderFps;
+        const starving = srcFps > 0 && srcFps < renderFps * 0.8;
+        el.statFps.textContent = shown.toFixed(shown < 10 ? 1 : 0);
         el.statMs.textContent = stats.cpuMs.toFixed(1);
-        el.statFps.parentElement.dataset.warn = fps < 24 ? 'true' : 'false';
+        el.statFps.parentElement.dataset.warn = (shown < 24) ? 'true' : 'false';
+        el.statFps.parentElement.title = starving
+          ? `摄像头只送来 ${srcFps.toFixed(1)} fps（渲染循环 ${renderFps.toFixed(0)} fps，在重复渲染同一帧）`
+          : '渲染帧率';
         el.statOut.textContent = fmtRes(p.outW, p.outH);
         const conf = stats.motionConf;
         el.motionMeta.textContent = conf > 0.55 ? '运动中 · 强补偿' : conf > 0.2 ? '轻微移动' : '静止';
@@ -462,6 +674,27 @@
       const b = e.target.closest('[data-fps]');
       if (b) setFps(Number(b.dataset.fps));
     });
+
+    // —— 采集分辨率 / 帧率 ——
+    el.captureResGroup.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-cap]');
+      if (!b) return;
+      const v = b.dataset.cap;
+      capture.height = v === 'auto' ? 'auto' : Number(v);
+      [...el.captureResGroup.children].forEach((n) => n.classList.toggle('is-active', n === b));
+      saveCapturePrefs();
+      applyCaptureSetting();
+    });
+    el.captureFpsGroup.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-capfps]');
+      if (!b) return;
+      const v = b.dataset.capfps;
+      capture.fps = v === 'auto' ? 'auto' : Number(v);
+      [...el.captureFpsGroup.children].forEach((n) => n.classList.toggle('is-active', n === b));
+      saveCapturePrefs();
+      applyCaptureSetting();
+    });
+    restoreCapturePrefs();
 
     el.engineGroup.addEventListener('click', (e) => {
       const b = e.target.closest('[data-engine]');

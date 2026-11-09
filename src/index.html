@@ -228,10 +228,35 @@
         </div>
 
         <div class="panel-group">
-          <div class="group-head"><h3>设备</h3></div>
+          <div class="group-head">
+            <h3>设备</h3>
+            <span class="group-meta" id="camStatus">未连接</span>
+          </div>
           <div class="device-select-wrap">
             <select id="cameraSelect" class="select"></select>
           </div>
+
+          <div class="row seg-row">
+            <span class="row-label" title="摄像头采集分辨率（不是输出分辨率）">采集分辨率</span>
+            <div class="seg-group" id="captureResGroup">
+              <button class="seg-pill" data-cap="540">540p</button>
+              <button class="seg-pill" data-cap="720">720p</button>
+              <button class="seg-pill is-active" data-cap="1080">1080p</button>
+              <button class="seg-pill" data-cap="auto">自动</button>
+            </div>
+          </div>
+
+          <div class="row seg-row">
+            <span class="row-label">采集帧率</span>
+            <div class="seg-group" id="captureFpsGroup">
+              <button class="seg-pill is-active" data-capfps="30">30</button>
+              <button class="seg-pill" data-capfps="60">60</button>
+              <button class="seg-pill" data-capfps="auto">自动</button>
+            </div>
+          </div>
+
+          <p class="hint-line" id="captureHint">切到「自动」由摄像头自己协商最稳的格式</p>
+
           <label class="row switch-row">
             <span class="row-label">自动白平衡</span>
             <input type="checkbox" id="ckAwb" class="switch" checked>

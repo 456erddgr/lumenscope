@@ -883,3 +883,15 @@ body.is-electron .topbar { padding-left: 88px; }
   color: var(--ink-3);
   white-space: nowrap;
 }
+
+/* —— 采集设置提示行 —— */
+.hint-line {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  letter-spacing: -.002em;
+  color: var(--ink-4);
+}
+.hint-line[data-tone="warn"] { color: #ffb340; }
+.hint-line[data-tone="ok"] { color: var(--ink-3); }
+#captureResGroup { grid-template-columns: repeat(4, 1fr); }
