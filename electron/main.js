@@ -1,5 +1,11 @@
 'use strict';
+// 某些开发环境 / 第三方工具会往环境里塞 ELECTRON_RUN_AS_NODE=1，
+// 那会让 Electron 退化成纯 Node（表现为双击没任何反应、直接退出）。
+// 这里在入口处清掉，保证安装版双击一定能起来。
+if (process.env.ELECTRON_RUN_AS_NODE) delete process.env.ELECTRON_RUN_AS_NODE;
+
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { listen } = require('../server.js');
@@ -121,7 +127,44 @@ ipcMain.handle('app:info', () => ({
   mediaDir: MEDIA_DIR(),
 }));
 
-app.whenReady().then(createWindow);
+// —— 首次运行时补装虚拟摄像头依赖 ——
+// 安装包本身只装主程序（Node/Electron/页面都是自带的），
+// 虚拟摄像头要额外一个 Python 小依赖。这里在装好后的第一次启动里后台补上，
+// 不阻塞界面、失败也不影响主功能。
+function ensureRuntimeDeps() {
+  const localAppData = process.env.LOCALAPPDATA || path.join(require('os').homedir(), 'AppData', 'Local');
+  const stateDir = path.join(localAppData, 'LumenScope');
+  const flag = path.join(stateDir, 'runtime-ready');
+  try { fs.mkdirSync(stateDir, { recursive: true }); } catch (_) {}
+  if (fs.existsSync(flag)) return;
+
+  // 已经能导入就直接标记，免得白跑一遍
+  try {
+    const { findPython } = require('../native/vcam_bridge.js');
+    if (findPython()) { fs.writeFileSync(flag, 'preinstalled\n'); return; }
+  } catch (_) {}
+
+  const script = app.isPackaged
+    ? path.join(process.resourcesPath, 'setup-runtime.ps1')
+    : path.join(__dirname, '..', 'scripts', 'setup-runtime.ps1');
+  if (!fs.existsSync(script)) return;
+
+  try {
+    const child = spawn('powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script],
+      { detached: true, stdio: 'ignore', windowsHide: true });
+    child.unref();
+    // 脚本自己会写 python.txt；这里只记一笔，下次启动不再重复触发
+    fs.writeFileSync(flag, new Date().toISOString() + '\n');
+  } catch (e) {
+    try { fs.appendFileSync(path.join(stateDir, 'setup.log'), 'spawn failed: ' + e.message + '\n'); } catch (_) {}
+  }
+}
+
+app.whenReady().then(() => {
+  ensureRuntimeDeps();
+  return createWindow();
+});
 app.on('before-quit', () => { if (vcam) { try { vcam.stop(); } catch (_) {} } });
 app.on('window-all-closed', () => {
   if (vcam) { try { vcam.stop(); } catch (_) {} }

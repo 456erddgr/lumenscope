@@ -17,7 +17,23 @@ const PY_CANDIDATES = [
 
 function findPython() {
   const { execFileSync } = require('child_process');
-  for (const cand of PY_CANDIDATES) {
+  const os = require('os');
+
+  // 安装程序会把可用的解释器写在这里，优先用（省去每次探测的几百毫秒，
+  // 也让"装的时候用哪个 Python"和"跑的时候用哪个"保持一致）
+  const hints = [];
+  try {
+    const p = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'LumenScope', 'python.txt');
+    if (fs.existsSync(p)) {
+      const line = fs.readFileSync(p, 'utf8').trim();
+      if (line) hints.push(line);
+    }
+  } catch (_) {}
+  // 便携版（安装程序自动下载的那个）
+  hints.push(path.join(process.env.LOCALAPPDATA || '', 'LumenScope', 'python', 'python.exe'));
+
+  for (const cand of [...hints, ...PY_CANDIDATES]) {
+    if (!cand) continue;
     const parts = cand.split(/\s+/);
     try {
       execFileSync(parts[0], [...parts.slice(1), '-c', 'import pyvirtualcam, numpy'], { stdio: 'ignore', timeout: 8000 });
@@ -55,7 +71,14 @@ class VirtualCamBridge {
       return this.state();
     }
 
-    const hostPath = path.join(__dirname, 'vcam_host.py');
+    const hostPath = path.join(__dirname, 'vcam_host.py')
+      // 打包进 asar 后 Python 读不了虚拟路径，asarUnpack 会把真实文件放在 app.asar.unpacked 下
+      .replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
+    if (!fs.existsSync(hostPath)) {
+      this.status = 'error';
+      this.lastError = '缺少 vcam_host.py：' + hostPath;
+      return this.state();
+    }
     this.child = spawn(py[0], [...py.slice(1), hostPath], { stdio: ['pipe', 'pipe', 'pipe'] });
 
     // 子进程退出/管道破裂时写入会抛 EOF，必须吞掉，否则整个进程崩溃

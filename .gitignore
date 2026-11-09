@@ -24,3 +24,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# 构建产物（安装包走 GitHub Release，不进 git 历史）
+dist/

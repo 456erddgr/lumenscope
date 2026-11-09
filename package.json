@@ -1,6 +1,6 @@
 {
   "name": "lumenscope",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "显微镜 / USB 摄像头的实时查看器：超分辨率、防抖、防果冻、降噪、数字变焦，可输出虚拟摄像头",
   "main": "electron/main.js",
   "keywords": [
@@ -28,12 +28,71 @@
     "test:zoom": "node scripts/test-zoom.js",
     "bench:quality": "node scripts/bench-quality.js",
     "bench:upscale": "node scripts/bench-upscale.js",
-    "make:source": "node scripts/make-y4m.js"
+    "make:source": "node scripts/make-y4m.js",
+    "dist": "electron-builder --win nsis --x64"
   },
   "engines": {
     "node": ">=18"
   },
   "devDependencies": {
-    "electron": "^45.2.3"
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.zhiyinjunn.lumenscope",
+    "productName": "LumenScope",
+    "copyright": "Copyright © 2026 只因君",
+    "directories": {
+      "output": "dist",
+      "buildResources": "docs"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "docs/icon.ico",
+      "artifactName": "LumenScope-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LumenScope",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "installerIcon": "docs/icon.ico",
+      "uninstallerIcon": "docs/icon.ico",
+      "installerHeaderIcon": "docs/icon.ico"
+    },
+    "files": [
+      "electron/**/*",
+      "native/**/*",
+      "src/**/*",
+      "server.js",
+      "launch.js",
+      "package.json",
+      "docs/icon.ico",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "scripts/setup-runtime.ps1",
+        "to": "setup-runtime.ps1"
+      }
+    ],
+    "asar": true,
+    "compression": "maximum",
+    "asarUnpack": [
+      "native/**/*.py",
+      "scripts/*.ps1"
+    ]
   }
 }
