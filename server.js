@@ -90,7 +90,19 @@ async function handleApi(req, res, url) {
 
   if (route === '/api/vcam/start' && req.method === 'POST') {
     try {
-      const st = await getBridge().start();
+      // 尺寸由前端按当前输出档位传（query 或 body 都支持），缺省 1920x1080
+      let opts = {};
+      try {
+        const raw = await readBody(req, 8 * 1024);
+        if (raw && raw.length) opts = JSON.parse(raw.toString('utf8')) || {};
+      } catch (_) { /* 没有 body 就用 query */ }
+      const q = url.searchParams;
+      const pick = (k) => Number(opts[k] || q.get(k) || 0) || undefined;
+      const st = await getBridge().start({
+        width: pick('width') || pick('w'),
+        height: pick('height') || pick('h'),
+        fps: pick('fps'),
+      });
       return sendJSON(res, 200, { ...st, ws: st.ready ? `ws://127.0.0.1:${st.port}` : null });
     } catch (e) {
       return sendJSON(res, 500, { status: 'error', error: String(e && e.message || e) });

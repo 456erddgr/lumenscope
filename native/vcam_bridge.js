@@ -57,12 +57,26 @@ class VirtualCamBridge {
     this.lastError = null;
     this.clients = new Set();
     this.status = 'idle';        // idle | starting | live | error
+    this.curW = 0; this.curH = 0; this.curFps = 0;   // 当前驱动实际打开的分辨率/帧率
   }
 
-  async start() {
-    if (this.status === 'live' || this.status === 'starting') return this.state();
+  // options: { width, height, fps } —— 必须由调用方按当前输出档位传进来，
+  // 否则驱动会用宿主里写死的默认值（1280x720），用户在界面切 1080p/2K 也不生效。
+  async start(options = {}) {
+    const wantW = Math.max(320, Math.min(3840, Math.round(options.width || 1920)));
+    const wantH = Math.max(240, Math.min(2160, Math.round(options.height || 1080)));
+    const wantFps = Math.max(1, Math.min(120, Math.round(options.fps || 30)));
+
+    // 尺寸/帧率变了就必须重启宿主进程：OBS 虚拟摄像头的格式在打开时就定死了
+    if (this.status === 'live' || this.status === 'starting') {
+      const same = this.curW === wantW && this.curH === wantH && this.curFps === wantFps;
+      if (same) return this.state();
+      // 换尺寸：必须等旧宿主彻底退出、驱动释放，否则新宿主打不开（会立刻退出）
+      await this.stopAsync();
+    }
     this.status = 'starting';
     this.lastError = null;
+    this.curW = wantW; this.curH = wantH; this.curFps = wantFps;
 
     const py = findPython();
     if (!py) {
@@ -79,7 +93,14 @@ class VirtualCamBridge {
       this.lastError = '缺少 vcam_host.py：' + hostPath;
       return this.state();
     }
-    this.child = spawn(py[0], [...py.slice(1), hostPath], { stdio: ['pipe', 'pipe', 'pipe'] });
+    // 把目标尺寸交给宿主：宿主启动时就按这个分辨率打开驱动，
+    // 之后如果来的帧尺寸不同，宿主会自己重开（代价是一次黑屏，所以尽量一开始就给对）。
+    const env = Object.assign({}, process.env, {
+      LUMEN_VCAM_W: String(wantW),
+      LUMEN_VCAM_H: String(wantH),
+      LUMEN_VCAM_FPS: String(wantFps),
+    });
+    this.child = spawn(py[0], [...py.slice(1), hostPath], { stdio: ['pipe', 'pipe', 'pipe'], env });
 
     // 子进程退出/管道破裂时写入会抛 EOF，必须吞掉，否则整个进程崩溃
     this.child.stdin.on('error', (e) => {
@@ -123,7 +144,7 @@ class VirtualCamBridge {
     if (!this.ready) {
       this.status = 'error';
       if (!this.lastError) this.lastError = '虚拟摄像头启动超时（OBS Virtual Camera 驱动未就绪）';
-      this.stop();
+      await this.stopAsync();
     }
     return this.state();
   }
@@ -167,19 +188,52 @@ class VirtualCamBridge {
     }
   }
 
-  stop() {
+  // 停止并**等到子进程真正退出**再返回。
+  // 关键：OBS 虚拟摄像头是独占的，旧进程还占着驱动时新进程一定打不开
+  // （表现就是切 2K 后宿主立刻退出、frames 一直是 0）。
+  async stopAsync() {
     for (const ws of this.clients) { try { ws.close(); } catch (_) {} }
     this.clients.clear();
     if (this.wss) { try { this.wss.close(); } catch (_) {} this.wss = null; }
     if (this.server) { try { this.server.close(); } catch (_) {} this.server = null; this.port = 0; }
-    if (this.child) {
-      try { this.child.stdin.end(); } catch (_) {}
-      setTimeout(() => { try { this.child && this.child.kill(); } catch (_) {} }, 400);
-      this.child = null;
-    }
+
+    const child = this.child;
+    this.child = null;
     this.ready = false;
     this.status = 'idle';
     this.frames = 0; this.bytes = 0; this.dropped = 0;
+
+    if (!child) return this.state();
+
+    const exited = new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      child.once('exit', finish);
+      child.once('close', finish);
+      setTimeout(finish, 3000);
+    });
+
+    // 1) 先礼貌地关 stdin，让 Python 自己 close 摄像头并退出
+    try { child.stdin.end(); } catch (_) {}
+    const graceful = await Promise.race([exited, new Promise((r) => setTimeout(() => r('timeout'), 900))]);
+    if (graceful === 'timeout') {
+      // 2) 没退就强杀。Windows 上 Electron 的 kill() 有时只发 CTRL_CLOSE，
+      //    这里补一发 taskkill /F 兜底，确保不留下占着驱动的孤儿进程。
+      try { child.kill('SIGKILL'); } catch (_) {}
+      try {
+        const { execFileSync } = require('child_process');
+        execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', timeout: 4000 });
+      } catch (_) {}
+      await Promise.race([exited, new Promise((r) => setTimeout(r, 1500))]);
+    }
+    // 3) 再给驱动一点时间彻底释放（实测 250ms 足够，取 400ms 保险）
+    await new Promise((r) => setTimeout(r, 400));
+    return this.state();
+  }
+
+  stop() {
+    // 同步版：只用于程序退出等不关心后续的场景
+    void this.stopAsync();
     return this.state();
   }
 
@@ -189,6 +243,9 @@ class VirtualCamBridge {
       port: this.port,
       ready: this.ready,
       device: this.device,
+      width: this.curW || 0,
+      height: this.curH || 0,
+      fps: this.curFps || 0,
       frames: this.frames,
       dropped: this.dropped,
       bytes: this.bytes,

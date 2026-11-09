@@ -109,9 +109,11 @@ ipcMain.handle('media:reveal', async () => {
 });
 
 // —— 虚拟摄像头（输出处理后的画面给系统）——
-ipcMain.handle('vcam:start', async () => {
+ipcMain.handle('vcam:start', async (_e, opts) => {
   if (!vcam) vcam = new VirtualCamBridge();
-  const st = await vcam.start();
+  // opts = {width, height, fps}，由渲染进程按当前输出档位传入。
+  // 之前这里没接收参数，导致驱动永远按宿主的默认 1280x720 打开 —— 界面切 1080p/2K 都不生效。
+  const st = await vcam.start(opts || {});
   return { ...st, wsUrl: st.port ? `ws://127.0.0.1:${st.port}/` : null };
 });
 ipcMain.handle('vcam:stop', () => {

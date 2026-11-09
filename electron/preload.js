@@ -7,7 +7,7 @@ contextBridge.exposeInMainWorld('lumen', {
   revealMedia: () => ipcRenderer.invoke('media:reveal'),
   info: () => ipcRenderer.invoke('app:info'),
   // 虚拟摄像头：由渲染进程把处理后的画面推给本机虚拟摄像头驱动
-  vcamStart: () => ipcRenderer.invoke('vcam:start'),
+  vcamStart: (opts) => ipcRenderer.invoke('vcam:start', opts),
   vcamStop: () => ipcRenderer.invoke('vcam:stop'),
   vcamState: () => ipcRenderer.invoke('vcam:state'),
   // 无边框窗口控制（页面自绘交通灯）

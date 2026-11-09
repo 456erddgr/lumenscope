@@ -48,7 +48,7 @@
         saveMedia: (name, buf) => window.lumen.saveMedia(name, buf),
         saveBlob: async (name, blob) => window.lumen.saveMedia(name, await blob.arrayBuffer()),
         revealMedia: () => window.lumen.revealMedia(),
-        vcamStart: () => window.lumen.vcamStart(),
+        vcamStart: (opts) => window.lumen.vcamStart(opts),
         vcamStop: () => window.lumen.vcamStop(),
       };
     }
@@ -88,7 +88,11 @@
         return hostRef.saveBlob(name, blob);
       },
       revealMedia: () => api('/api/reveal', { method: 'POST' }),
-      vcamStart: () => api('/api/vcam/start', { method: 'POST' }),
+      vcamStart: (opts) => api('/api/vcam/start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(opts || {}),
+      }),
       vcamStop: () => api('/api/vcam/stop', { method: 'POST' }),
     };
   })();
@@ -451,7 +455,8 @@
       document.querySelectorAll('[data-fps]').forEach(b => {
         b.classList.toggle('is-active', Number(b.dataset.fps) === fps);
       });
-      if (state.streamer && state.streamer.on) { /* 重连以更新帧率头 */ restartVcam(); }
+      // 帧率变了也要让驱动重开，否则输出仍是旧帧率
+      if (state.vcamOn) restartVcamForSize();
     };
     el.fpsGroup.addEventListener('click', (e) => {
       const b = e.target.closest('[data-fps]');
@@ -489,12 +494,31 @@
   function setResolution(h) {
     const p = state.pipeline;
     if (!p) return;
+    const prevDims = [p.outW, p.outH];
     p.setOutput(h);
     p.resetAll();
     document.querySelectorAll('.res-card').forEach(c => c.classList.toggle('is-active', Number(c.dataset.res) === h));
     document.querySelectorAll('.seg').forEach(c => c.classList.toggle('is-active', Number(c.dataset.res) === h));
     updateResMeta();
     el.statOut.textContent = fmtRes(p.outW, p.outH);
+    // 虚拟摄像头开着的时候，档位一变就得让驱动按新分辨率重开
+    // （OBS 虚拟摄像头的输出格式在打开时固定，不重开是不会变的）
+    if (state.vcamOn && (prevDims[0] !== p.outW || prevDims[1] !== p.outH)) {
+      restartVcamForSize();
+    }
+  }
+
+  // 分辨率/帧率变了：重启虚拟摄像头，把新尺寸交给驱动
+  let _vcamResizeTimer = 0;
+  function restartVcamForSize() {
+    if (!state.vcamOn) return;
+    clearTimeout(_vcamResizeTimer);
+    // 连续点几档时只重启最后一次，避免反复抢驱动
+    _vcamResizeTimer = setTimeout(async () => {
+      toast('正在按新分辨率重启虚拟摄像头…', 'info', 2200);
+      await stopVcam({ silent: true });
+      await startVcam();
+    }, 260);
   }
 
   function updateResMeta() {
@@ -691,7 +715,11 @@
     if (!state.pipeline || !state.video) { toast('请先连接摄像头', 'error'); return; }
     setVcamUI('starting');
     try {
-      const st = await host.vcamStart();
+      // 关键：把当前输出档位告诉驱动。
+      // OBS 虚拟摄像头的格式在打开时就定死，不传就会退回默认 720p。
+      const p = state.pipeline;
+      const want = { width: p.outW, height: p.outH, fps: p.settings.targetFps || 30 };
+      const st = await host.vcamStart(want);
       const wsUrl = st && (st.wsUrl || st.ws);
       if (!wsUrl) {
         setVcamUI('error', st && st.error ? String(st.error).slice(0, 60) : '驱动未就绪');
@@ -708,20 +736,21 @@
       }
       state.streamer = streamer;
       state.vcamOn = true;
-      setVcamUI('live', st.device || 'OBS Virtual Camera');
-      toast(`虚拟摄像头已开启 · ${st.device || 'OBS Virtual Camera'}`, 'ok', 4200);
+      const dims = (st.width && st.height) ? `${st.width}×${st.height}@${st.fps || want.fps}` : `${want.width}×${want.height}@${want.fps}`;
+      setVcamUI('live', dims);
+      toast(`虚拟摄像头已开启 · ${dims}`, 'ok', 4200);
     } catch (e) {
       setVcamUI('error', String(e.message || e).slice(0, 60));
       toast('虚拟摄像头异常：' + (e.message || e), 'error', 5000);
     }
   }
 
-  async function stopVcam() {
+  async function stopVcam(opts = {}) {
     if (state.streamer) { state.streamer.disconnect(); state.streamer = null; }
     state.vcamOn = false;
     try { await host.vcamStop(); } catch (_) {}
     setVcamUI('off');
-    toast('虚拟摄像头已关闭');
+    if (!opts.silent) toast('虚拟摄像头已关闭');
   }
 
   async function restartVcam() {

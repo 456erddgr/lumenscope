@@ -49,6 +49,17 @@ def main():
         cur_w, cur_h, cur_fps, cur_fmt = w, h, fps, fmt
         print(f"READY {cam.device} {w}x{h}@{fps} fmt={fmt}", flush=True)
 
+    # 收到终止信号时先关摄像头再退出，避免驱动被"半开"状态占住
+    import signal
+
+    def _bye(signum, frame):
+        raise SystemExit(0)
+    for sig in ('SIGTERM', 'SIGBREAK', 'SIGINT'):
+        try:
+            signal.signal(getattr(signal, sig), _bye)
+        except Exception:
+            pass
+
     try:
         open_cam(DEFAULT_W, DEFAULT_H, DEFAULT_FPS, DEFAULT_FMT)
     except Exception as e:
@@ -86,14 +97,18 @@ def main():
 
             arr = np.frombuffer(data, dtype=np.uint8).reshape(h, w, bpp)
             if fmt == 0:
-                # RGBA → RGB（OBS 后端不接受 RGBA；去 alpha 需要一次连续拷贝）
-                cam.send(np.ascontiguousarray(arr[:, :, :3]))
+                # RGBA → RGB。驱动只吃 RGB，多出来的 alpha 通道只能丢掉。
+                # 用切片 + ascontiguousarray 是一次内存拷贝，2K 下约 14 MB/帧。
+                rgb = np.ascontiguousarray(arr[:, :, :3])
+                cam.send(rgb)
             elif fmt == 1:
                 cam.send(arr)              # RGB 直送
             else:
                 cam.send(np.ascontiguousarray(arr[:, :, ::-1]))  # BGR 输入时翻转
-            cam.sleep_until_next_frame()
             frame_count += 1
+            # sleep_until_next_frame 会等到"下一帧该发的时刻"才返回。
+            # 配合前端 30fps 的节流，这里其实没有等待余量；真要卡顿就由背压丢帧。
+            cam.sleep_until_next_frame()
     except BrokenPipeError:
         pass
     except Exception as e:
@@ -102,6 +117,7 @@ def main():
         if cam is not None:
             try:
                 cam.close()
+                cam = None
             except Exception:
                 pass
         print(f"BYE frames={frame_count}", file=sys.stderr, flush=True)
