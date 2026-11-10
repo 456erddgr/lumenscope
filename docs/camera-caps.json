@@ -1,0 +1,100 @@
+{
+  "device": "USB CAMERA (1224:2a25)",
+  "best": {
+    "name": "auto（驱动自选）",
+    "want": null,
+    "actual": [
+      640,
+      480
+    ],
+    "fps": 30,
+    "ok": true
+  },
+  "results": [
+    {
+      "name": "auto（驱动自选）",
+      "want": null,
+      "actual": [
+        640,
+        480
+      ],
+      "fps": 30,
+      "ok": true
+    },
+    {
+      "name": "1920x1080",
+      "want": [
+        1920,
+        1080
+      ],
+      "err": "no-first-frame",
+      "actual": null
+    },
+    {
+      "name": "1600x900",
+      "want": [
+        1600,
+        900
+      ],
+      "err": "no-frames",
+      "actual": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "1280x720",
+      "want": [
+        1280,
+        720
+      ],
+      "err": "no-frames",
+      "actual": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "1280x960",
+      "want": [
+        1280,
+        960
+      ],
+      "err": "no-frames",
+      "actual": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "960x540",
+      "want": [
+        960,
+        540
+      ],
+      "err": "no-first-frame",
+      "actual": null
+    },
+    {
+      "name": "800x600",
+      "want": [
+        800,
+        600
+      ],
+      "err": "no-first-frame",
+      "actual": null
+    },
+    {
+      "name": "640x480",
+      "want": [
+        640,
+        480
+      ],
+      "err": "no-frames",
+      "actual": [
+        640,
+        480
+      ]
+    }
+  ]
+}

@@ -19,6 +19,7 @@
     ckAutoExposure: $('ckAutoExposure'), fpsGroup: $('fpsGroup'), engineGroup: $('engineGroup'),
     captureResGroup: $('captureResGroup'), captureFpsGroup: $('captureFpsGroup'),
     captureHint: $('captureHint'), camStatus: $('camStatus'),
+    btnProbe: $('btnProbe'), probeLabel: $('probeLabel'),
     btnVcam: $('btnVcam'), vcamLabel: $('vcamLabel'), vcamHint: $('vcamHint'), vcamMeta: $('vcamMeta'),
     zoomCtl: $('zoomCtl'), zoomIn: $('zoomIn'), zoomOut: $('zoomOut'), zoomVal: $('zoomVal'), zoomPct: $('zoomPct'),
   };
@@ -38,6 +39,9 @@
     vcamOn: false,
     srcFps: null,      // 摄像头真实帧率探针
     srcRaf: 0,
+    probing: false,    // 是否正在探查摄像头能力
+    lastCaps: null,
+    probeResult: null, // 探查结论 { w, h, fps }
   };
 
   // ---------- 宿主适配层 ----------
@@ -427,6 +431,12 @@
       el.captureHint.dataset.tone = 'ok';
       return;
     }
+    // 刚探查过：优先显示探查结论，别覆盖成"给不了 xxx"
+    if (state.probeResult && state.probeResult.w === w && state.probeResult.h === h) {
+      el.captureHint.textContent = `已探明最佳：${w}×${h} @${Math.round(state.probeResult.fps)}fps`;
+      el.captureHint.dataset.tone = 'ok';
+      return;
+    }
     // 你选的 vs 实际拿到的，不一致就说清楚
     const gotLower = wantRes && h < wantRes * 0.9;
     const fpsLower = wantFps && declared && declared < wantFps * 0.9;
@@ -444,6 +454,7 @@
 
   // 切换采集分辨率/帧率 → 用原设备重开一次
   async function applyCaptureSetting() {
+    state.probeResult = null;
     if (!state.available.length) {
       toast('还没有连接摄像头', 'info');
       return;
@@ -451,6 +462,161 @@
     const cam = state.available.find((c) => c.deviceId === state.deviceId) || pickPreferred(state.available);
     if (!cam) return;
     await openCamera(cam);
+  }
+
+  // ---------- 自动探查摄像头能力 ----------
+  // 逐个候选格式试开采集、实测真实帧率，按「先保帧率(≥25)，再取最高分辨率」挑最优。
+  // 关键经验（实测得出）：
+  //   · 有些 UVC（这台 VID_1224）一带 ideal/exact 约束就进坏路径（0 帧或无首帧）
+  //   · deviceId 每个浏览器会话独立，必须现取现用
+  //   · 同一页面连续开关摄像头会互相干扰 —— 所以探查要"试一档 → 停干净 → 再试下一档"
+  const CAP_CANDIDATES = [
+    { h: 1080, label: '1920×1080' },
+    { h: 900, label: '1600×900' },
+    { h: 720, label: '1280×720' },
+    { h: 960, label: '1280×960' },
+    { h: 540, label: '960×540' },
+    { h: 480, label: '640×480' },
+  ];
+
+  // 试一个约束：返回 { fps, width, height } 或 null
+  async function tryCapture(deviceId, want, ms) {
+    let stream = null;
+    try {
+      const c = { audio: false, video: {} };
+      if (deviceId) c.video.deviceId = { exact: deviceId };
+      if (want) {
+        c.video.height = { ideal: want };
+        c.video.width = { ideal: Math.round(want * 16 / 9) };
+      }
+      stream = await Promise.race([
+        navigator.mediaDevices.getUserMedia(c),
+        new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('timeout'), { name: 'Timeout' })), 6000)),
+      ]);
+    } catch (_) {
+      return null;
+    }
+    try {
+      const v = document.createElement('video');
+      v.srcObject = stream;
+      v.muted = true;
+      v.playsInline = true;
+      await v.play().catch(() => {});
+      // 等首帧
+      const got = await new Promise((resolve) => {
+        if (v.videoWidth) return resolve(true);
+        const t = setInterval(() => { if (v.videoWidth) { clearInterval(t); resolve(true); } }, 40);
+        setTimeout(() => { clearInterval(t); resolve(!!v.videoWidth); }, 2200);
+      });
+      if (!got) { try { v.pause(); } catch (_) {} return null; }
+      const size = [v.videoWidth, v.videoHeight];
+
+      // 数帧
+      let n = 0, cb = 0;
+      const onF = () => { n++; try { cb = v.requestVideoFrameCallback(onF); } catch (_) {} };
+      if (typeof v.requestVideoFrameCallback === 'function') {
+        try { cb = v.requestVideoFrameCallback(onF); } catch (_) {}
+      }
+      await new Promise((r) => setTimeout(r, ms));
+      try { if (cb) v.cancelVideoFrameCallback(cb); } catch (_) {}
+      try { v.pause(); } catch (_) {}
+      v.srcObject = null;
+      if (n === 0) return null;
+      return { fps: n * 1000 / ms, width: size[0], height: size[1] };
+    } catch (_) {
+      return null;
+    } finally {
+      try { stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+      // 留点时间让设备释放，下一个候选才测得准
+      await new Promise((r) => setTimeout(r, 260));
+    }
+  }
+
+  // 完整探查：返回 { best: {h,label,fps,w,h}, log: [...] }
+  async function probeCameraCaps(deviceId, onProgress) {
+    // 先关掉当前采集，避免跟自己抢设备
+    closeStream();
+    await new Promise((r) => setTimeout(r, 500));
+
+    const log = [];
+    const good = [];
+
+    // ① 先测"只给 deviceId"（最保险的兜底）
+    const plain = await tryCapture(deviceId, null, 900);
+    log.push({ name: '自动（驱动自选）', got: plain });
+    if (plain && plain.fps >= 25) good.push({ name: '自动', want: null, ...plain });
+
+    // ② 再逐档试分辨率
+    for (const c of CAP_CANDIDATES) {
+      if (onProgress) onProgress(c.label);
+      const r = await tryCapture(deviceId, c.h, 900);
+      log.push({ name: c.label, got: r });
+      if (r && r.fps >= 25) good.push({ name: c.label, want: c.h, ...r });
+    }
+
+    // 排序：先保帧率，再取分辨率
+    good.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+    return { best: good[0] || null, log, good };
+  }
+
+  async function runCapabilityProbe() {
+    if (state.probing) return;
+    const cam = state.available.find((c) => c.deviceId === state.deviceId) || pickPreferred(state.available);
+    if (!cam) { toast('没有检测到摄像头', 'error'); return; }
+
+    state.probing = true;
+    if (el.btnProbe) el.btnProbe.disabled = true;
+    const useId = cam.deviceId;
+    toast('正在逐个试摄像头支持的格式，大约 10 秒…', 'info', 5000);
+    if (el.captureHint) {
+      el.captureHint.textContent = '正在探查…';
+      el.captureHint.dataset.tone = 'ok';
+    }
+
+    let result = null;
+    try {
+      result = await probeCameraCaps(useId, (label) => {
+        if (el.captureHint) el.captureHint.textContent = '正在试 ' + label + '…';
+      });
+    } catch (e) {
+      toast('探查失败：' + (e.message || e), 'error');
+    }
+
+    state.probing = false;
+    if (el.btnProbe) el.btnProbe.disabled = false;
+    state.lastCaps = result;
+
+    if (!result || !result.best) {
+      toast('没找到能稳定跑 25fps 的格式，已回到自动', 'error', 5000);
+      capture.height = 'auto';
+      saveCapturePrefs();
+      restoreCapturePrefs();
+      await openCamera(cam);
+      return;
+    }
+
+    const b = result.best;
+    // 应用到设置
+    capture.height = b.want === null ? 'auto' : (b.want <= 540 ? 540 : b.want <= 720 ? 720 : 1080);
+    saveCapturePrefs();
+    restoreCapturePrefs();
+
+    // 把探查结论写到面板
+    const lines = result.log.map((l) => `${l.name}: ${l.got ? `${l.got.width}×${l.got.height} @${l.got.fps.toFixed(0)}fps` : '不可用'}`);
+    console.log('[camera-caps]', lines.join(' | '));
+
+    await openCamera(cam);
+    toast(`探查完成：${b.width}×${b.height} @${b.fps.toFixed(0)}fps 最稳`, 'ok', 5000);
+    // openCamera 里的 updateCaptureInfo 会覆盖提示，这里把探查结论再写回去，
+    // 而且只写一次结论（不要再叠一句"给不了 1080p"，两句放一起会让人以为出错）
+    state.probeResult = { w: b.width, h: b.height, fps: b.fps };
+    if (el.captureHint) {
+      const tried = result.log.filter((l) => !l.got).map((l) => l.name);
+      el.captureHint.textContent =
+        `已探明最佳：${b.width}×${b.height} @${b.fps.toFixed(0)}fps` +
+        (tried.length ? `（${tried.join('、')} 用不了）` : '');
+      el.captureHint.dataset.tone = 'ok';
+    }
   }
 
   // 记住用户的采集设置
@@ -695,6 +861,10 @@
       applyCaptureSetting();
     });
     restoreCapturePrefs();
+
+    if (el.btnProbe) {
+      el.btnProbe.addEventListener('click', () => runCapabilityProbe());
+    }
 
     el.engineGroup.addEventListener('click', (e) => {
       const b = e.target.closest('[data-engine]');

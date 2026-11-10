@@ -1,6 +1,6 @@
 {
   "name": "lumenscope",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "显微镜 / USB 摄像头的实时查看器：超分辨率、防抖、防果冻、降噪、数字变焦，可输出虚拟摄像头",
   "main": "electron/main.js",
   "keywords": [
@@ -32,7 +32,9 @@
     "dist": "electron-builder --win nsis --x64",
     "verify:vcam": "node scripts/verify-vcam-res.js",
     "verify:processed": "node scripts/verify-vcam-processed.js",
-    "verify:capture": "node scripts/verify-capture-settings.js"
+    "verify:capture": "node scripts/verify-capture-settings.js",
+    "probe:caps": "node scripts/probe-camera-caps2.js",
+    "diag:real": "node scripts/diag-real.js"
   },
   "engines": {
     "node": ">=18"
